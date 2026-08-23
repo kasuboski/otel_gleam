@@ -1,0 +1,17 @@
+[tools]
+gleam = "latest"
+erlang = "latest"
+rebar = "latest"
+
+
+[tasks.check]
+description = "Check all packages and self-contained examples compile without warnings"
+run = [
+  "for dir in packages/*/; do echo \"→ Checking $dir\" && (cd \"$dir\" && gleam check) || exit $?; done",
+  "for dir in packages/*/examples/*/ packages/*/examples/*/*/; do if [ -f \"$dir/gleam.toml\" ]; then if grep -q 'knowledge/repos/' \"$dir/gleam.toml\" && [ ! -d knowledge/repos ]; then echo \"→ Skipping $dir (missing knowledge/repos dependencies)\"; else echo \"→ Checking $dir\" && (cd \"$dir\" && gleam check) || exit $?; fi; fi; done",
+]
+
+[tasks.test]
+description = "Run unit tests for all packages"
+run = "for dir in packages/*/; do echo \"→ Testing $dir\" && (cd \"$dir\" && gleam test) || exit $?; done"
+
