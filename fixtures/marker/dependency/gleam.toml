@@ -1,0 +1,7 @@
+name = "otel_gleam_marker_dependency"
+version = "0.1.0"
+target = "erlang"
+licences = ["Apache-2.0"]
+
+[dependencies]
+gleam_stdlib = ">= 1.0.0 and < 2.0.0"

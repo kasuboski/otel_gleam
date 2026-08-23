@@ -1,0 +1,18 @@
+name = "otel_gleam"
+version = "0.1.0"
+description = "Typed Gleam bindings for the Erlang OpenTelemetry tracing API"
+target = "erlang"
+gleam = ">= 1.17.0"
+licences = ["Apache-2.0"]
+
+[dependencies]
+gleam_stdlib = ">= 1.0.0 and < 2.0.0"
+opentelemetry_api = "1.5.0"
+
+[tools.glinter.ignore]
+# Public binding functions are consumed by external projects and acceptance
+# fixtures; the distributable root project intentionally has no test modules.
+"src/otel/*.gleam" = ["label_possible", "unused_exports"]
+
+[dev-dependencies]
+glinter = ">= 2.19.1 and < 3.0.0"

@@ -1,0 +1,16 @@
+name = "otel_gleam_basic_example"
+version = "0.1.0"
+target = "erlang"
+licences = ["Apache-2.0"]
+
+[dependencies]
+gleam_stdlib = ">= 1.0.0 and < 2.0.0"
+otel_gleam = { path = "../.." }
+
+[dev-dependencies]
+glinter = ">= 2.19.1 and < 3.0.0"
+
+[tools.glinter.ignore]
+# Static span names and attribute keys are instrumentation schema constants; a
+# typo is a programmer error that should fail immediately in this example.
+"src/otel_gleam_basic_example.gleam" = ["assert_ok_pattern"]

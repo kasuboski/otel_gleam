@@ -2,6 +2,7 @@
 *.ez
 **/build
 erl_crash.dump
+rebar3.crashdump
 
 **/node_modules/
 *.sqlite*

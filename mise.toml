@@ -1,17 +1,53 @@
 [tools]
-gleam = "latest"
+gleam = "1.17.0"
 erlang = "latest"
 rebar = "latest"
 
+[tasks.format]
+description = "Check formatting for the root package, example, and test fixtures"
+run = ". scripts/project_dirs.sh; for dir in $ALL_PROJECTS; do echo \"Formatting $dir\" && (cd \"$dir\" && gleam format --check) || exit $?; done"
 
 [tasks.check]
-description = "Check all packages and self-contained examples compile without warnings"
-run = [
-  "for dir in packages/*/; do echo \"→ Checking $dir\" && (cd \"$dir\" && gleam check) || exit $?; done",
-  "for dir in packages/*/examples/*/ packages/*/examples/*/*/; do if [ -f \"$dir/gleam.toml\" ]; then if grep -q 'knowledge/repos/' \"$dir/gleam.toml\" && [ ! -d knowledge/repos ]; then echo \"→ Skipping $dir (missing knowledge/repos dependencies)\"; else echo \"→ Checking $dir\" && (cd \"$dir\" && gleam check) || exit $?; fi; fi; done",
-]
+description = "Check the root package, example, and test fixtures compile without warnings"
+run = ". scripts/project_dirs.sh; for dir in $ALL_PROJECTS; do echo \"Checking $dir\" && (cd \"$dir\" && gleam check) || exit $?; done"
+
+[tasks.build]
+description = "Build the root package, example, and test fixtures with warnings treated as errors"
+run = ". scripts/project_dirs.sh; for dir in $ALL_PROJECTS; do echo \"Building $dir\" && (cd \"$dir\" && gleam build --warnings-as-errors) || exit $?; done"
+
+[tasks.erlc]
+description = "Compile root-package and fixture Erlang FFI with warnings treated as errors"
+run = """
+set -eu
+. scripts/project_dirs.sh
+for dir in $ALL_PROJECTS; do
+  files=$(rg --files "$dir/src" "$dir/test" 2>/dev/null | rg '\\.erl$' || true)
+  [ -n \"$files\" ] || continue
+  echo \"Compiling Erlang FFI in $dir\"
+  mkdir -p \"$dir/build/erlc-check\"
+  erlc -Wall -Werror \\
+    -I "$dir/include" \\
+    -I \"$dir/build/dev/erlang/opentelemetry_api/include\" \\
+    -I \"$dir/build/dev/erlang/opentelemetry/include\" \\
+    -I \"$dir/build/packages/opentelemetry_api/include\" \\
+    -I \"$dir/build/packages/opentelemetry/include\" \\
+    -pa \"$dir/build/dev/erlang/opentelemetry_api\" \\
+    -pa \"$dir/build/dev/erlang/opentelemetry\" \\
+    -pa \"$dir/build/packages/opentelemetry_api\" \\
+    -pa \"$dir/build/packages/opentelemetry\" \\
+    -o \"$dir/build/erlc-check\" $files
+done
+"""
+
+[tasks.lint]
+description = "Run Glinter for the root package, example, and test runners"
+run = ". scripts/project_dirs.sh; for dir in $LINT_PROJECTS; do echo \"Linting $dir\" && (cd \"$dir\" && gleam run -m glinter) || exit $?; done"
 
 [tasks.test]
-description = "Run unit tests for all packages"
-run = "for dir in packages/*/; do echo \"→ Testing $dir\" && (cd \"$dir\" && gleam test) || exit $?; done"
+description = "Run root and acceptance-fixture tests"
+run = ". scripts/project_dirs.sh; for dir in $TEST_PROJECTS; do echo \"Testing $dir\" && (cd \"$dir\" && gleam test) || exit $?; done"
+
+[tasks.git-consumer]
+description = "Validate a clean consumer using a full SHA Git dependency"
+run = "sh scripts/validate_git_consumer.sh"
 
