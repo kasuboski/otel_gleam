@@ -794,6 +794,19 @@ pub fn configured_propagation_matrix_test() {
     ]
 }
 
+// Observations of the locked dependency, not a propagation specification.
+pub fn dependency_propagation_characterization_test() {
+  recording_setup()
+  characterize_dependency(Sdk)
+}
+
+@external(erlang, "otel_propagation_characterization_ffi", "characterize")
+fn characterize_dependency(mode: DependencyMode) -> Nil
+
+type DependencyMode {
+  Sdk
+}
+
 fn recording_setup() {
   test_clear_api_schema_url()
   test_sdk_setup()

@@ -100,10 +100,11 @@ Initial compatibility floor:
 |---|---|
 | `otel/attribute` | Valid typed OpenTelemetry attribute keys and values |
 | `otel/context` | Opaque context capture and exception-safe process-local scoping |
+| `otel/baggage` | Typed explicit-context baggage inspection, update, removal, and clearing |
 | `otel/trace` | Tracer selection, span lifecycle, links, attributes, status, and events |
 | `otel/propagation` | Explicit-context configured text-map extraction and injection |
 
-Implementation FFI lives in `src/otel_gleam_ffi.erl`. More private Erlang modules may be introduced only when they reduce implementation complexity; they do not become public seams.
+Implementation FFI lives in `src/otel_gleam_ffi.erl` and `src/otel_gleam_baggage_ffi.erl`. The Erlang text-map module `otel_gleam_propagator_baggage` is an explicit host-configuration seam, not an automatically installed propagator. More private Erlang modules may be introduced only when they reduce implementation complexity.
 
 There is no required public root `otel` module in 0.1.0.
 
@@ -192,6 +193,37 @@ pub fn with_context(context: Context, work: fn() -> a) -> a
 - Sending a context does not install it in the receiver. The receiver passes it explicitly to `trace.start`, `propagation.inject`, or `with_context`.
 - Raw `attach`/`detach` and their token are not public. The official token may be a previous map or `undefined`, and Gleam cannot enforce one-time LIFO token use.
 - `with_context` delegates to `otel_ctx:with_ctx/2` or an equivalent `try/catch` implementation. It preserves the callback result and re-raises the original callback class, reason, and stacktrace after restoration.
+
+## 5.3 `otel/baggage`
+
+### Public types and functions
+
+```gleam
+pub type Property {
+  Flag(String)
+  KeyValue(String, String)
+}
+
+pub type Entry {
+  Entry(value: String, properties: List(Property))
+}
+
+pub fn get(context: Context, key: String) -> Option(Entry)
+pub fn get_all(context: Context) -> List(#(String, Entry))
+pub fn set(context: Context, key: String, value: String, properties: List(Property)) -> Context
+pub fn remove(context: Context, key: String) -> Context
+pub fn clear(context: Context) -> Context
+```
+
+### Invariants
+
+- Every operation reads or returns the supplied context; none reads or changes process-current context.
+- `get` distinguishes an absent key (`None`) from a present entry with an empty value (`Some(Entry("", ...))`).
+- `set` replaces the named entry and its properties while retaining other baggage and all non-baggage context values.
+- `remove` removes only the named entry; `clear` removes all baggage and preserves trace context and other context values.
+- Property order is preserved. `get_all` order is unspecified because the official baggage representation is a map.
+- Baggage values and property metadata are explicit context data and are never copied to span attributes by this binding.
+- Context operations represent UTF-8 strings; W3C wire validation is performed by the safe propagator. Invalid wire keys or metadata are omitted rather than rewritten.
 
 ## 6. `otel/trace`
 
@@ -488,11 +520,12 @@ pub fn inject(context: Context, carrier: Carrier) -> Carrier
 - `Carrier` maps to an Erlang list of `{binary(), binary()}` pairs.
 - `extract` starts from `otel_ctx:new()` and calls `otel_propagator_text_map:extract_to/3` with `opentelemetry:get_text_map_extractor()`.
 - `inject` calls `otel_propagator_text_map:inject_from/3` with the explicit context and `opentelemetry:get_text_map_injector()`.
-- Neither function reads or changes process-current context.
-- The binding does not parse W3C headers itself and does not invent malformed-carrier errors. The official configured extractor leaves context unchanged for absent or malformed input.
-- The official default carrier lookup is case-insensitive and combines duplicate values with commas. Its setter replaces only the first case-insensitive matching pair and leaves later duplicate pairs untouched; the binding preserves that exact behavior rather than inventing configured-propagator field normalization.
-- With no SDK/configured propagator, official no-op propagation leaves the empty context or carrier unchanged.
-- The host chooses configured propagators. The reviewed SDK defaults to W3C Trace Context plus Baggage, but that is host configuration rather than a binding invariant.
+- Neither function reads or changes process-current context. Generic propagation delegates to the configured propagators; this library does not install global configuration.
+- Carrier lookup and update behavior is determined by the configured propagator and its carrier implementation. Do not treat one carrier's duplicate-header behavior as a universal baggage rule.
+- The host chooses propagators. To enable the safe Erlang baggage propagator, compose it explicitly with trace context using `otel_propagator_text_map_composite:create([trace_context, otel_gleam_propagator_baggage])` and configure it with `opentelemetry:set_text_map_propagator/1`. This is host configuration, not automatic SDK setup by the binding.
+- For this baggage propagator, each malformed member is omitted independently; malformed percent escapes discard that member. Valid percent bytes that decode to invalid UTF-8 produce U+FFFD. Empty values are allowed and literal `+` is preserved. Values and properties are percent-encoded. In map-backed context, the last valid duplicate wins.
+- The baggage propagator accepts at most 64 members and 8192 combined bytes; above either limit, the entire baggage value is omitted, never truncated. It does not log raw input.
+- Baggage is explicit context data and is never automatically recorded as span attributes. Scrubbing sensitive headers remains the consumer's responsibility.
 - Removing untrusted inbound `traceparent`, `tracestate`, or `baggage` before outbound injection is an HTTP proxy/instrumentation policy, not this generic module's responsibility.
 
 ## 8. Failure Model
@@ -509,7 +542,7 @@ The interface deliberately separates invalid caller construction from ordinary t
 | No SDK after successful marker identity resolution | `trace.tracer_for` returns `Ok` with the official no-op tracer; tracer/span operations are official no-ops |
 | Unsampled/non-recording span | Mutations and end are harmless |
 | Closed span | Mutations and repeated end are harmless |
-| Malformed/absent propagation header | Official extractor returns unchanged empty context |
+| Malformed/absent propagation header | Behavior is defined by the configured propagator; the baggage propagator omits malformed members independently |
 | Exporter outage | Host SDK/exporter concern; does not change operation result |
 
 `tracer_for` MUST fail closed rather than guess when ownership cannot be proven. It MUST NOT catch and hide arbitrary VM failures such as `system_limit`, `bad_alloc`, corrupted external terms, or defects in the binding itself. The guarantee is that valid public values and documented official no-op/unsampled states do not alter application results—not that every possible Erlang failure is swallowed.
@@ -646,14 +679,17 @@ Using the official SDK and a deterministic in-memory test processor/exporter:
 
 ### 11.4 Propagation
 
-With the official W3C configured propagators:
+With the official W3C Trace Context propagator and the configured `otel_gleam_propagator_baggage`:
 
-- Valid `traceparent` extraction yields a remote parent.
-- Malformed, zero-ID, and version-`ff` traceparent values leave the new context without a valid span.
-- Valid `tracestate` and baggage round-trip.
-- Injection uses the supplied context even when a different context is process-current.
-- Extraction never changes process-current context.
-- Header lookup is case-insensitive; extraction comma-joins duplicates, while injection replaces only the first matching pair and retains later duplicates, matching the official carrier implementation.
+- Valid `traceparent` extraction yields a remote parent; malformed, zero-ID, and version-`ff` values leave no valid remote span.
+- Valid `tracestate` and baggage round-trip through explicit contexts.
+- Injection uses the supplied context even when a different context is process-current; extraction never changes process-current context.
+- The safe baggage parser independently omits malformed members, preserves valid neighbors, accepts empty values, preserves literal `+`, encodes spaces as `%20`, and substitutes U+FFFD for invalid UTF-8 decoded from valid percent escapes.
+- Last valid duplicate baggage key wins in the map-backed context; keys are case-sensitive.
+- The propagator carries all baggage up to 64 members and 8192 combined bytes. Above either limit it omits baggage as a whole and never truncates a member.
+- For the default list carrier, repeated case-insensitive baggage fields combine in order and are preflighted before joining. Injection uses the supplied carrier setter, whose official default replaces only the first matching pair and retains later duplicates.
+- Custom carrier implementations must enforce input allocation limits before or in their getter; the propagator applies its 8192-byte check to the getter result before parsing.
+- Malformed baggage does not cause the safe propagator to raise or log raw carrier contents.
 
 ### 11.5 Lifecycle scenarios
 
