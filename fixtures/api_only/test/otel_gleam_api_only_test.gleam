@@ -99,6 +99,19 @@ pub fn no_sdk_public_api_test() {
   assert context.current() == before
 }
 
+// First verify the unconfigured no-op, then explicitly configure API propagators.
+pub fn dependency_propagation_characterization_test() {
+  characterize_dependency(ApiOnly)
+  assert sdk_is_absent()
+}
+
+type DependencyMode {
+  ApiOnly
+}
+
+@external(erlang, "otel_propagation_characterization_ffi", "characterize")
+fn characterize_dependency(mode: DependencyMode) -> Nil
+
 @external(erlang, "otel_gleam_api_only_test_ffi", "catch_callback")
 fn catch_callback(work: fn() -> a) -> Result(a, #(String, String, String))
 

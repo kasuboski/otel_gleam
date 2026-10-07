@@ -101,3 +101,52 @@ transfer, and cross-node propagation, see
 and configured official propagator. Extraction is detached and does not change
 the process-current context. HTTP header scrubbing and host SDK/exporter
 configuration remain responsibilities of the application.
+
+## Baggage
+
+`otel/baggage` provides explicit-context `get`, `get_all`, `set`, `remove`, and
+`clear` operations. Entries contain a value and ordered `Flag(String)` or
+`KeyValue(String, String)` properties. Baggage is not automatically recorded as
+span attributes; pass it through the context explicitly. Lookup distinguishes a
+missing key from a present empty value:
+
+```gleam
+import gleam/option.{None, Some}
+import otel/baggage
+import otel/propagation
+
+pub fn handle(headers: propagation.Carrier) -> #(String, propagation.Carrier) {
+  let incoming = propagation.extract(headers)
+  let user_id = case baggage.get(incoming, "user.id") {
+    Some(baggage.Entry(value, _properties)) -> value
+    None -> "anonymous"
+  }
+
+  let outbound_context = baggage.remove(incoming, "user.id")
+  let outbound_headers = propagation.inject(outbound_context, [])
+  #(user_id, outbound_headers)
+}
+```
+
+Baggage propagation is opt-in. On Erlang, configure the safe baggage propagator
+alongside trace context in the host application, for example:
+
+```erlang
+opentelemetry:set_text_map_propagator(
+  otel_propagator_text_map_composite:create([
+    trace_context,
+    otel_gleam_propagator_baggage
+  ])
+).
+```
+
+The library does not install global propagator configuration. The baggage
+propagator omits malformed members independently (including members with
+malformed percent escapes), preserves literal `+`, permits empty values, and
+uses replacement characters for invalid UTF-8 decoded from valid percent
+bytes. It percent-encodes values and properties. In map-backed contexts the
+last valid duplicate wins. Inputs over 64 members or 8192 combined bytes are
+omitted in full, not truncated. Raw input is not logged. Scrubbing sensitive
+headers remains the consumer's responsibility: removing baggage from a context
+does not remove an already-present baggage field from the carrier passed to
+`propagation.inject`.
